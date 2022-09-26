@@ -88,7 +88,7 @@ func (h *Hub) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	client := &Client{hub: h, conn: conn, Send: make(chan []byte, 256)}
+	client := &Client{hub: h, Conn: conn, Send: make(chan []byte, 256)}
 	client.hub.register <- client
 	go client.writePump()
 	client.readPump()
