@@ -28,6 +28,7 @@ type Hub struct {
 	incoming         chan *Message
 	incomingHandler  func(*Message)
 	onConnectHandler func(*Client)
+	onDisconnectHandler func(*Client)
 }
 
 // NewHub initialises a new hub
@@ -51,6 +52,11 @@ func (h *Hub) SetOnConnectHandler(handler func(*Client)) {
 	h.onConnectHandler = handler
 }
 
+// SetOnDisconnectHandler sets a handler function to be called on a client disconnection
+func (h *Hub) SetOnDisconnectHandler(handler func(*Client)) {
+	h.onDisconnectHandler = handler
+}
+
 // Run loops forever, processing incoming and outgoing messages, and registering and unregistering clients.
 func (h *Hub) Run() {
 	for {
@@ -62,6 +68,9 @@ func (h *Hub) Run() {
 			}
 		case client := <-h.unregister:
 			if _, ok := h.clients[client]; ok {
+				if h.onDisconnectHandler != nil {
+					h.onDisconnectHandler(client)
+				}
 				delete(h.clients, client)
 				close(client.Send)
 			}
