@@ -29,6 +29,8 @@ type Client struct {
 }
 
 func (c *Client) readPump() {
+	log := log.WithField("client", c.Conn.RemoteAddr())
+	log.Debug("websockethub: readpump starting")
 	defer func() {
 		c.hub.unregister <- c
 		c.Conn.Close()
@@ -40,17 +42,21 @@ func (c *Client) readPump() {
 	for {
 		_, msg, err := c.Conn.ReadMessage()
 		if err != nil {
+			log.Debugf("websockethub: error reading message: %v", err)
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway) {
-				log.Warnf("Websocket closed unexpectedly: %v", err)
+				log.Warnf("websockethub: closed unexpectedly: %v", err)
 			}
 			break
 		}
 		c.hub.incoming <- &Message{msg, c.Conn.RemoteAddr()}
 	}
+	log.Debug("websockethub: readpump done")
 
 }
 
 func (c *Client) writePump() {
+	log := log.WithField("client", c.Conn.RemoteAddr())
+	log.Debug("websockethub: writepump starting")
 	ticker := time.NewTicker(pingPeriod)
 	defer func() {
 		ticker.Stop()
@@ -62,30 +68,45 @@ func (c *Client) writePump() {
 			c.Conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if !ok {
 				// Hub Closed channel
+				log.Debug("websockethub: disconnecting client")
 				c.Conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
 
 			w, err := c.Conn.NextWriter(websocket.TextMessage)
 			if err != nil {
+				log.Debugf("websockethub: error getting writer for conn: %v", err)
 				return
 			}
-			w.Write(message)
+			_, err = w.Write(message)
+			if err != nil {
+				log.Debugf("websockethub: error writing to client: %v", err)
+				return
+			}
 
 			// Add queued messages too
 			for i := 0; i < len(c.Send); i++ {
-				w.Write(<-c.Send)
+				_, err = w.Write(<-c.Send)
+				if err != nil {
+					log.Debugf("websockethub: error writing to client: %v", err)
+					return
+				}
 			}
 
 			if err := w.Close(); err != nil {
+				if err != nil {
+					log.Debugf("websockethub: error closing writer: %v", err)
+					return
+				}
 				return
 			}
 		case <-ticker.C:
 			c.Conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if err := c.Conn.WriteMessage(websocket.PingMessage, []byte{}); err != nil {
-				log.Error(err)
+				log.Errorf("websockethub: error writing ping to client: %v", err)
 				return
 			}
 		}
 	}
+	log.Debug("websockethub: writepump done")
 }
