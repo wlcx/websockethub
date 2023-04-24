@@ -1,6 +1,7 @@
 package hub
 
 import (
+	"net/http"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -21,14 +22,21 @@ const (
 	maxMessageSize = 512
 )
 
-// Client is a websocket Client
-type Client struct {
-	hub  *Hub
-	Conn *websocket.Conn
-	Send chan []byte
+// Something that can be turned into []byte.
+// This is the interface over which websockethub is generic.
+type Byteable interface {
+	ToBytes() ([]byte, error)
 }
 
-func (c *Client) readPump() {
+// Client is a websocket Client
+type Client[T Byteable] struct {
+	hub     *Hub[T]
+	Conn    *websocket.Conn
+	Send    chan T
+	Request *http.Request
+}
+
+func (c *Client[T]) readPump() {
 	log := log.WithField("client", c.Conn.RemoteAddr())
 	log.Debug("websockethub: readpump starting")
 	defer func() {
@@ -54,7 +62,7 @@ func (c *Client) readPump() {
 
 }
 
-func (c *Client) writePump() {
+func (c *Client[T]) writePump() {
 	log := log.WithField("client", c.Conn.RemoteAddr())
 	log.Debug("websockethub: writepump starting")
 	ticker := time.NewTicker(pingPeriod)
@@ -78,7 +86,12 @@ func (c *Client) writePump() {
 				log.Debugf("websockethub: error getting writer for conn: %v", err)
 				return
 			}
-			_, err = w.Write(message)
+			encoded, err := message.ToBytes()
+			if err != nil {
+				log.Errorf("websockethub: error encoding message to bytes: %s", err)
+				return
+			}
+			_, err = w.Write(encoded)
 			if err != nil {
 				log.Debugf("websockethub: error writing to client: %v", err)
 				return
@@ -86,7 +99,12 @@ func (c *Client) writePump() {
 
 			// Add queued messages too
 			for i := 0; i < len(c.Send); i++ {
-				_, err = w.Write(<-c.Send)
+				encoded, err := (<-c.Send).ToBytes()
+				if err != nil {
+					log.Errorf("websockethub: error encoding message to bytes: %s", err)
+					continue
+				}
+				_, err = w.Write(encoded)
 				if err != nil {
 					log.Debugf("websockethub: error writing to client: %v", err)
 					return
@@ -108,5 +126,4 @@ func (c *Client) writePump() {
 			}
 		}
 	}
-	log.Debug("websockethub: writepump done")
 }

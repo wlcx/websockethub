@@ -22,45 +22,54 @@ type Message struct {
 }
 
 // Hub is a websocket connection pool
-type Hub struct {
-	clients             map[*Client]bool
-	Broadcast           chan []byte
-	register            chan *Client
-	unregister          chan *Client
+type Hub[T Byteable] struct {
+	clients             map[*Client[T]]bool
+	Broadcast           chan T
+	register            chan *Client[T]
+	unregister          chan *Client[T]
 	incoming            chan *Message
 	incomingHandler     func(*Message)
-	onConnectHandler    func(*Client)
-	onDisconnectHandler func(*Client)
+	onConnectHandler    func(*Client[T])
+	onDisconnectHandler func(*Client[T])
+	onClientSendHandler func(*Client[T], T) bool
 }
 
 // NewHub initialises a new hub
-func NewHub() *Hub {
-	return &Hub{
-		Broadcast:  make(chan []byte),
-		register:   make(chan *Client),
-		unregister: make(chan *Client),
-		clients:    make(map[*Client]bool),
+func NewHub[T Byteable]() *Hub[T] {
+	return &Hub[T]{
+		Broadcast:  make(chan T),
+		register:   make(chan *Client[T]),
+		unregister: make(chan *Client[T]),
+		clients:    make(map[*Client[T]]bool),
 		incoming:   make(chan *Message),
 	}
 }
 
 // SetIncomingHandler sets a handler function to be called on an incoming message, rather than it being discarded.
-func (h *Hub) SetIncomingHandler(handler func(*Message)) {
+func (h *Hub[T]) SetIncomingHandler(handler func(*Message)) {
 	h.incomingHandler = handler
 }
 
 // SetOnConnectHandler sets a handler function to be called on a new client connection
-func (h *Hub) SetOnConnectHandler(handler func(*Client)) {
+func (h *Hub[T]) SetOnConnectHandler(handler func(*Client[T])) {
 	h.onConnectHandler = handler
 }
 
 // SetOnDisconnectHandler sets a handler function to be called on a client disconnection
-func (h *Hub) SetOnDisconnectHandler(handler func(*Client)) {
+func (h *Hub[T]) SetOnDisconnectHandler(handler func(*Client[T])) {
 	h.onDisconnectHandler = handler
 }
 
+// SetClientSendHandler sets a handler function to be called before sending a message to
+// a client. The function returns a bool for whether the message should be sent to the
+// client or not. This allows you to implement e.g. filtering logic using data sent in
+// the client's original request.
+func (h *Hub[T]) SetOnClientSendHandler(handler func(*Client[T], T) bool) {
+	h.onClientSendHandler = handler
+}
+
 // Run loops forever, processing incoming and outgoing messages, and registering and unregistering clients.
-func (h *Hub) Run(ctx context.Context) {
+func (h *Hub[T]) Run(ctx context.Context) {
 	log.Debug("websockethub: starting")
 mainloop:
 	for {
@@ -83,6 +92,10 @@ mainloop:
 			}
 		case message := <-h.Broadcast:
 			for client := range h.clients {
+				if h.onClientSendHandler != nil && !h.onClientSendHandler(client, message) {
+					log.Debug("websockethub: onClientSendHandler returned false, skipping sending message")
+					continue
+				}
 				select {
 				case client.Send <- message:
 				default:
@@ -107,12 +120,17 @@ mainloop:
 }
 
 // HandleRequest upgrades an incoming http request to a websocket connection, and registers the client
-func (h *Hub) HandleRequest(w http.ResponseWriter, r *http.Request) error {
+func (h *Hub[T]) HandleRequest(w http.ResponseWriter, r *http.Request) error {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return err
 	}
-	client := &Client{hub: h, Conn: conn, Send: make(chan []byte, 256)}
+	client := &Client[T]{
+		hub:     h,
+		Conn:    conn,
+		Send:    make(chan T, 256),
+		Request: r,
+	}
 	client.hub.register <- client
 	go client.writePump()
 	client.readPump()
