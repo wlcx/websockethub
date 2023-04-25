@@ -97,20 +97,6 @@ func (c *Client[T]) writePump() {
 				return
 			}
 
-			// Add queued messages too
-			for i := 0; i < len(c.Send); i++ {
-				encoded, err := (<-c.Send).ToBytes()
-				if err != nil {
-					log.Errorf("websockethub: error encoding message to bytes: %s", err)
-					continue
-				}
-				_, err = w.Write(encoded)
-				if err != nil {
-					log.Debugf("websockethub: error writing to client: %v", err)
-					return
-				}
-			}
-
 			if err := w.Close(); err != nil {
 				if err != nil {
 					log.Debugf("websockethub: error closing writer: %v", err)
